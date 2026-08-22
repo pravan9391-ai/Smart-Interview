@@ -1,13 +1,14 @@
 package com.smart_interview_backend.controller;
 
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-
 import com.smart_interview_backend.dto.AuthResponse;
 import com.smart_interview_backend.dto.LoginRequest;
 import com.smart_interview_backend.dto.RegisterRequest;
-import com.smart_interview_backend.entity.User;
+import com.smart_interview_backend.dto.UserResponse;
 import com.smart_interview_backend.service.AuthService;
+import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/auth")
@@ -20,20 +21,14 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<User> register(
-            @RequestBody RegisterRequest request) {
-
-        User user = authService.register(request);
-
-        return ResponseEntity.ok(user);
+    public ResponseEntity<UserResponse> register(
+            @Valid @RequestBody RegisterRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(authService.register(request));
     }
 
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(
-        @RequestBody LoginRequest request) {
-
-    AuthResponse response = authService.login(request);
-
-    return ResponseEntity.ok(response);
-}
+            @Valid @RequestBody LoginRequest request) {
+        return ResponseEntity.ok(authService.login(request));
+    }
 }
