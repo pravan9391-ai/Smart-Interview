@@ -1,33 +1,32 @@
 package com.smart_interview_backend.service;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.Arrays;
-import java.util.List;
-import java.util.stream.Collectors;
-
+import com.smart_interview_backend.dto.ResumeParseResponse;
+import com.smart_interview_backend.entity.Education;
+import com.smart_interview_backend.entity.Experience;
+import com.smart_interview_backend.entity.Project;
+import com.smart_interview_backend.entity.Skill;
+import com.smart_interview_backend.entity.User;
+import com.smart_interview_backend.repository.EducationRepository;
+import com.smart_interview_backend.repository.ExperienceRepository;
+import com.smart_interview_backend.repository.ProjectRepository;
+import com.smart_interview_backend.repository.SkillRepository;
+import jakarta.transaction.Transactional;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import com.smart_interview_backend.entity.Education;
-import com.smart_interview_backend.repository.EducationRepository;
-import com.smart_interview_backend.repository.SkillRepository;
-
-import com.smart_interview_backend.dto.ResumeParseResponse;
-import com.smart_interview_backend.entity.Skill;
-import com.smart_interview_backend.entity.User;
-
-import com.smart_interview_backend.entity.Experience;
-import com.smart_interview_backend.repository.ExperienceRepository;
-
-import com.smart_interview_backend.entity.Project;
-import com.smart_interview_backend.repository.ProjectRepository;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
+import java.util.stream.Collectors;
 
 @Service
 public class ResumeParserService {
+
+    private static final long MAX_FILE_SIZE = 5 * 1024 * 1024;
 
     private final SkillRepository skillRepository;
     private final EducationRepository educationRepository;
@@ -35,317 +34,301 @@ public class ResumeParserService {
     private final ProjectRepository projectRepository;
 
     public ResumeParserService(
-        SkillRepository skillRepository,
-        EducationRepository educationRepository,
-        ExperienceRepository experienceRepository,
-        ProjectRepository projectRepository) {
-
-    this.skillRepository = skillRepository;
-    this.educationRepository = educationRepository;
-    this.experienceRepository = experienceRepository;
-    this.projectRepository = projectRepository;
+            SkillRepository skillRepository,
+            EducationRepository educationRepository,
+            ExperienceRepository experienceRepository,
+            ProjectRepository projectRepository) {
+        this.skillRepository = skillRepository;
+        this.educationRepository = educationRepository;
+        this.experienceRepository = experienceRepository;
+        this.projectRepository = projectRepository;
     }
 
+    /**
+     * Extract text from a PDF resume.
+     */
     public String extractText(MultipartFile file) throws IOException {
+        validatePdf(file);
 
-        try (InputStream inputStream = file.getInputStream()) {
+        byte[] pdfBytes = file.getBytes();
 
-            byte[] pdfBytes = inputStream.readAllBytes();
-
-            try (PDDocument document = Loader.loadPDF(pdfBytes)) {
-
-                PDFTextStripper stripper = new PDFTextStripper();
-
-                return stripper.getText(document);
-            }
+        try (PDDocument document = Loader.loadPDF(pdfBytes)) {
+            PDFTextStripper stripper = new PDFTextStripper();
+            return stripper.getText(document);
         }
     }
 
+    /**
+     * Parse a named section without relying on case-sensitive headings.
+     */
     private String extractSection(
             String text,
             String startKeyword,
             String... endKeywords) {
 
-        String upperText = text.toUpperCase();
-
-        int start = upperText.indexOf(startKeyword);
-
-        if (start == -1) {
+        if (text == null || text.isBlank()) {
             return "";
         }
 
-        start += startKeyword.length();
+        String upperText = text.toUpperCase(Locale.ROOT);
+        String start = startKeyword.toUpperCase(Locale.ROOT);
 
-        int end = text.length();
+        int startIndex = upperText.indexOf(start);
+        if (startIndex == -1) {
+            return "";
+        }
 
-        for (String keyword : endKeywords) {
+        int contentStart = startIndex + start.length();
+        int contentEnd = text.length();
 
-            int position =
-                    upperText.indexOf(keyword.toUpperCase(), start);
+        for (String endKeyword : endKeywords) {
+            int position = upperText.indexOf(
+                    endKeyword.toUpperCase(Locale.ROOT),
+                    contentStart
+            );
 
-            if (position != -1 && position < end) {
-                end = position;
+            if (position != -1 && position < contentEnd) {
+                contentEnd = position;
             }
         }
 
-        return text.substring(start, end).trim();
+        if (contentStart >= contentEnd) {
+            return "";
+        }
+
+        return text.substring(contentStart, contentEnd).trim();
     }
 
+    private List<String> parseLines(String section) {
+        if (section == null || section.isBlank()) {
+            return List.of();
+        }
 
-    // STEP 3: Parse Skills
+        return Arrays.stream(section.split("\\R"))
+                .map(String::trim)
+                .filter(line -> !line.isBlank())
+                .distinct()
+                .collect(Collectors.toList());
+    }
+
     private List<String> parseSkills(String text) {
-
-        String section = extractSection(
+        return parseLines(extractSection(
                 text,
                 "SKILLS",
                 "EDUCATION",
                 "EXPERIENCE",
                 "PROJECTS"
-        );
-
-        return Arrays.stream(section.split("\\r?\\n"))
-                .map(String::trim)
-                .filter(line -> !line.isEmpty())
-                .collect(Collectors.toList());
+        ));
     }
 
-    // eduction parser method
     private List<String> parseEducation(String text) {
-
-    String section = extractSection(
-            text,
-            "EDUCATION",
-            "EXPERIENCE",
-            "PROJECTS",
-            "SKILLS"
-    );
-
-    return Arrays.stream(section.split("\\r?\\n"))
-            .map(String::trim)
-            .filter(line -> !line.isEmpty())
-            .collect(Collectors.toList());
+        return parseLines(extractSection(
+                text,
+                "EDUCATION",
+                "EXPERIENCE",
+                "PROJECTS",
+                "SKILLS"
+        ));
     }
 
-    // experience parser method
     private List<String> parseExperience(String text) {
-
-    String section = extractSection(
-            text,
-            "EXPERIENCE",
-            "EDUCATION",
-            "PROJECTS",
-            "SKILLS"
-    );
-
-    return Arrays.stream(section.split("\\r?\\n"))
-            .map(String::trim)
-            .filter(line -> !line.isEmpty())
-            .collect(Collectors.toList());
+        return parseLines(extractSection(
+                text,
+                "EXPERIENCE",
+                "EDUCATION",
+                "PROJECTS",
+                "SKILLS"
+        ));
     }
 
-    // project parser method
     private List<String> parseProjects(String text) {
-
-    String section = extractSection(
-            text,
-            "PROJECTS",
-            "EDUCATION",
-            "EXPERIENCE",
-            "SKILLS"
-    );
-
-    return Arrays.stream(section.split("\\r?\\n"))
-            .map(String::trim)
-            .filter(line -> !line.isEmpty())
-            .collect(Collectors.toList());
-}
-
-
-
-    //main parser method
-    public ResumeParseResponse parseResume(MultipartFile file)
-        throws IOException {
-
-    String text = extractText(file);
-
-    List<String> skills = parseSkills(text);
-
-    List<String> education = parseEducation(text);
-
-    List<String> experience = parseExperience(text);
-
-    List<String> projects = parseProjects(text);
-
-    return new ResumeParseResponse(
-            skills,
-            education,
-            projects,
-            experience
-    );
+        return parseLines(extractSection(
+                text,
+                "PROJECTS",
+                "EDUCATION",
+                "EXPERIENCE",
+                "SKILLS"
+        ));
     }
 
-    private void saveSkills(List<String> parsedSkills, User user) {
-
-    for (String skillName : parsedSkills) {
-
-        Skill skill = new Skill();
-
-        skill.setSkillName(skillName);
-
-        skill.setUser(user);
-
-        skillRepository.save(skill);
-    }
+    /**
+     * Parse only. This method intentionally does not write to the database.
+     * It is useful for clients that only need the extracted JSON.
+     */
+    public ResumeParseResponse parseResume(MultipartFile file) throws IOException {
+        String text = extractText(file);
+        return buildParseResponse(text);
     }
 
-
-    private void saveEducation(
-        List<String> parsedEducation,
-        User user) {
-
-    if (parsedEducation == null || parsedEducation.isEmpty()) {
-        return;
-    }
-
-    Education education = new Education();
-
-    if (parsedEducation.size() > 0) {
-        education.setDegree(parsedEducation.get(0));
-    }
-
-    if (parsedEducation.size() > 1) {
-        education.setInstitution(parsedEducation.get(1));
-    }
-
-    if (parsedEducation.size() > 2) {
-        education.setFieldOfStudy(parsedEducation.get(2));
-    }
-
-    if (parsedEducation.size() > 3) {
-        education.setStartYear(parsedEducation.get(3));
-    }
-
-    if (parsedEducation.size() > 4) {
-        education.setEndYear(parsedEducation.get(4));
-    }
-
-    education.setUser(user);
-
-    educationRepository.save(education);
-    }
-
-
-    private void saveExperience(
-        List<String> parsedExperience,
-        User user) {
-
-    if (parsedExperience == null || parsedExperience.isEmpty()) {
-        return;
-    }
-
-    Experience experience = new Experience();
-
-    if (parsedExperience.size() > 0) {
-        experience.setCompanyName(
-                parsedExperience.get(0)
-        );
-    }
-
-    if (parsedExperience.size() > 1) {
-        experience.setJobTitle(
-                parsedExperience.get(1)
-        );
-    }
-
-    if (parsedExperience.size() > 2) {
-        experience.setStartDate(
-                parsedExperience.get(2)
-        );
-    }
-
-    if (parsedExperience.size() > 3) {
-        experience.setEndDate(
-                parsedExperience.get(3)
-        );
-    }
-
-    if (parsedExperience.size() > 4) {
-        experience.setDescription(
-                parsedExperience.get(4)
-        );
-    }
-
-    experience.setUser(user);
-
-    experienceRepository.save(experience);
-    }
-
-    private void saveProjects(
-        List<String> parsedProjects,
-        User user) {
-
-    for (String projectText : parsedProjects) {
-
-        Project project = new Project();
-
-        project.setProjectName(projectText);
-
-        project.setUser(user);
-
-        projectRepository.save(project);
-    }
-    }
-
-
-    public void parseAndSaveResume(
+    /**
+     * Parse and persist all supported resume data for the authenticated user.
+     *
+     * The whole operation is transactional: if one database write fails,
+     * none of the parsed records are committed.
+     */
+    @Transactional
+    public ResumeParseResponse parseAndSaveResume(
             MultipartFile file,
             User user) throws IOException {
 
         validatePdf(file);
-        // 1. Extract text from PDF
+
+        if (user == null || user.getId() == null) {
+            throw new IllegalArgumentException("Authenticated user is required");
+        }
+
         String text = extractText(file);
+        ResumeParseResponse response = buildParseResponse(text);
 
-        // 2. Parse sections
-        List<String> parsedSkills = parseSkills(text);
+        saveSkills(response.getSkills(), user);
+        saveEducation(response.getEducation(), user);
+        saveExperience(response.getExperience(), user);
+        saveProjects(response.getProjects(), user);
 
-        List<String> parsedEducation = parseEducation(text);
+        // Flush here so a database constraint/connection error is reported
+        // by this request rather than later when the transaction is committed.
+        skillRepository.flush();
+        educationRepository.flush();
+        experienceRepository.flush();
+        projectRepository.flush();
 
-        List<String> parsedExperience = parseExperience(text);
+        return response;
+    }
 
-        List<String> parsedProjects = parseProjects(text);
+    private ResumeParseResponse buildParseResponse(String text) {
+        return new ResumeParseResponse(
+                parseSkills(text),
+                parseEducation(text),
+                parseProjects(text),
+                parseExperience(text)
+        );
+    }
 
-        // 3. Save extracted data
-        saveSkills(parsedSkills, user);
+    private void saveSkills(List<String> parsedSkills, User user) {
+        if (parsedSkills == null) {
+            return;
+        }
 
-        saveEducation(parsedEducation, user);
+        for (String skillName : parsedSkills) {
+            String value = cleanValue(skillName);
+            if (value == null) {
+                continue;
+            }
 
-        saveExperience(parsedExperience, user);
+            Skill skill = new Skill();
+            skill.setSkillName(value);
+            skill.setUser(user);
+            skillRepository.save(skill);
+        }
+    }
 
-        saveProjects(parsedProjects, user);
+    /**
+     * Education has non-null degree and institution columns.
+     * Therefore an incomplete parsed block must not be inserted.
+     */
+    private void saveEducation(List<String> parsedEducation, User user) {
+        if (parsedEducation == null || parsedEducation.size() < 2) {
+            return;
+        }
+
+        String degree = cleanValue(parsedEducation.get(0));
+        String institution = cleanValue(parsedEducation.get(1));
+
+        if (degree == null || institution == null) {
+            return;
+        }
+
+        Education education = new Education();
+        education.setDegree(degree);
+        education.setInstitution(institution);
+        education.setFieldOfStudy(valueAt(parsedEducation, 2));
+        education.setStartYear(valueAt(parsedEducation, 3));
+        education.setEndYear(valueAt(parsedEducation, 4));
+        education.setUser(user);
+
+        educationRepository.save(education);
+    }
+
+    /**
+     * Experience has non-null companyName and jobTitle columns.
+     * Therefore an incomplete parsed block must not be inserted.
+     */
+    private void saveExperience(List<String> parsedExperience, User user) {
+        if (parsedExperience == null || parsedExperience.size() < 2) {
+            return;
+        }
+
+        String companyName = cleanValue(parsedExperience.get(0));
+        String jobTitle = cleanValue(parsedExperience.get(1));
+
+        if (companyName == null || jobTitle == null) {
+            return;
+        }
+
+        Experience experience = new Experience();
+        experience.setCompanyName(companyName);
+        experience.setJobTitle(jobTitle);
+        experience.setStartDate(valueAt(parsedExperience, 2));
+        experience.setEndDate(valueAt(parsedExperience, 3));
+        experience.setDescription(valueAt(parsedExperience, 4));
+        experience.setUser(user);
+
+        experienceRepository.save(experience);
+    }
+
+    private void saveProjects(List<String> parsedProjects, User user) {
+        if (parsedProjects == null) {
+            return;
+        }
+
+        for (String projectText : parsedProjects) {
+            String value = cleanValue(projectText);
+            if (value == null) {
+                continue;
+            }
+
+            Project project = new Project();
+            project.setProjectName(value);
+            project.setUser(user);
+            projectRepository.save(project);
+        }
+    }
+
+    private String valueAt(List<String> values, int index) {
+        if (values == null || index >= values.size()) {
+            return null;
+        }
+        return cleanValue(values.get(index));
+    }
+
+    private String cleanValue(String value) {
+        if (value == null) {
+            return null;
+        }
+
+        String cleaned = value.trim();
+        return cleaned.isBlank() ? null : cleaned;
     }
 
     private void validatePdf(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("Resume file is empty");
+        }
 
-    if (file == null || file.isEmpty()) {
-        throw new RuntimeException(
-                "Resume file is empty"
-        );
+        String filename = file.getOriginalFilename();
+        String contentType = file.getContentType();
+
+        boolean pdfByExtension = filename != null
+                && filename.toLowerCase(Locale.ROOT).endsWith(".pdf");
+
+        boolean pdfByContentType = "application/pdf".equalsIgnoreCase(contentType);
+
+        if (!pdfByExtension && !pdfByContentType) {
+            throw new IllegalArgumentException("Only PDF files are allowed");
+        }
+
+        if (file.getSize() > MAX_FILE_SIZE) {
+            throw new IllegalArgumentException("Resume size must be less than 5 MB");
+        }
     }
-
-    if (!"application/pdf".equals(
-            file.getContentType())) {
-
-        throw new RuntimeException(
-                "Only PDF files are allowed"
-        );
-    }
-
-    if (file.getSize() > 5 * 1024 * 1024) {
-
-        throw new RuntimeException(
-                "Resume size must be less than 5 MB"
-        );
-    }
-    }
-
 }
